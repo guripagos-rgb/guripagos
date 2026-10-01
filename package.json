@@ -1,0 +1,14 @@
+{
+  "name": "billetera-backend",
+  "version": "1.0.0",
+  "description": "Backend de micropagos por PIN",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "express": "^4.19.2",
+    "pg": "^8.11.3"
+  }
+}
