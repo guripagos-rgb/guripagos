@@ -134,3 +134,48 @@ app.get('/api/v1/accounts/balance/:identifier', async (req, res) => {
         return res.status(500).json({ error: "Error interno del servidor" });
     }
 });
+// Endpoint para consultar el historial de transacciones de un usuario
+app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
+    const { identifier } = req.params;
+
+    try {
+        // Primero buscamos el id interno del usuario usando su identificador
+        const userQuery = `SELECT id, full_name, identifier FROM users WHERE identifier = $1`;
+        const userResult = await pool.query(userQuery, [identifier]);
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: "Usuario no encontrado" });
+        }
+
+        const user = userResult.rows[0];
+
+        // Luego consultamos las transacciones asociadas a su cuenta, ordenadas por fecha descendente
+        const txQuery = `
+            SELECT t.id, t.amount, t.status, t.description, t.created_at 
+            FROM transactions t
+            JOIN accounts a ON t.account_id = a.id
+            WHERE a.user_id = $1
+            ORDER BY t.created_at DESC
+        `;
+        
+        const txResult = await pool.query(txQuery, [user.id]);
+
+        return res.status(200).json({
+            status: "success",
+            user: user.full_name,
+            identifier: user.identifier,
+            total_transactions: txResult.rows.length,
+            transactions: txResult.rows.map(tx => ({
+                id: tx.id,
+                amount: parseFloat(tx.amount),
+                status: tx.status,
+                description: tx.description || "Pago de micropago",
+                timestamp: tx.created_at
+            }))
+        });
+
+    } catch (error) {
+        console.error("Error al obtener el historial de transacciones:", error);
+        return res.status(500).json({ error: "Error interno del servidor" });
+    }
+});
