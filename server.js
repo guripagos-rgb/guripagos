@@ -101,3 +101,36 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+// Endpoint para consultar el saldo del usuario
+app.get('/api/v1/accounts/balance/:identifier', async (req, res) => {
+    const { identifier } = req.params;
+
+    try {
+        const query = `
+            SELECT u.id, u.full_name, u.identifier, a.balance 
+            FROM users u
+            JOIN accounts a ON u.id = a.user_id
+            WHERE u.identifier = $1
+        `;
+        
+        const result = await pool.query(query, [identifier]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Usuario o cuenta no encontrada" });
+        }
+
+        const userAccount = result.rows[0];
+
+        return res.status(200).json({
+            status: "success",
+            user: userAccount.full_name,
+            identifier: userAccount.identifier,
+            balance: parseFloat(userAccount.balance),
+            timestamp: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error("Error al consultar el saldo:", error);
+        return res.status(500).json({ error: "Error interno del servidor" });
+    }
+});
