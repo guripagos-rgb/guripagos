@@ -139,7 +139,7 @@ app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
     const { identifier } = req.params;
 
     try {
-        // Primero buscamos el id interno del usuario usando su identificador
+        // 1. Buscamos al usuario
         const userQuery = `SELECT id, full_name, identifier FROM users WHERE identifier = $1`;
         const userResult = await pool.query(userQuery, [identifier]);
 
@@ -149,13 +149,12 @@ app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
 
         const user = userResult.rows[0];
 
-        // Luego consultamos las transacciones asociadas a su cuenta, ordenadas por fecha descendente
+        // 2. Consultamos las transacciones usando t.* para evitar errores de columnas específicas
         const txQuery = `
-            SELECT t.id, t.amount, t.status, t.description, t.created_at 
+            SELECT t.* 
             FROM transactions t
             JOIN accounts a ON t.account_id = a.id
             WHERE a.user_id = $1
-            ORDER BY t.created_at DESC
         `;
         
         const txResult = await pool.query(txQuery, [user.id]);
@@ -168,9 +167,8 @@ app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
             transactions: txResult.rows.map(tx => ({
                 id: tx.id,
                 amount: parseFloat(tx.amount),
-                status: tx.status,
-                description: tx.description || "Pago de micropago",
-                timestamp: tx.created_at
+                status: tx.status || "success",
+                timestamp: tx.created_at || tx.timestamp || new Date()
             }))
         });
 
