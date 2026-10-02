@@ -139,7 +139,6 @@ app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
     const { identifier } = req.params;
 
     try {
-        // 1. Buscamos al usuario
         const userQuery = `SELECT id, full_name, identifier FROM users WHERE identifier = $1`;
         const userResult = await pool.query(userQuery, [identifier]);
 
@@ -149,7 +148,6 @@ app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
 
         const user = userResult.rows[0];
 
-        // 2. Consultamos las transacciones usando t.* para evitar errores de columnas específicas
         const txQuery = `
             SELECT t.* 
             FROM transactions t
@@ -164,16 +162,12 @@ app.get('/api/v1/transactions/history/:identifier', async (req, res) => {
             user: user.full_name,
             identifier: user.identifier,
             total_transactions: txResult.rows.length,
-            transactions: txResult.rows.map(tx => ({
-                id: tx.id,
-                amount: parseFloat(tx.amount),
-                status: tx.status || "success",
-                timestamp: tx.created_at || tx.timestamp || new Date()
-            }))
+            transactions: txResult.rows
         });
 
     } catch (error) {
         console.error("Error al obtener el historial de transacciones:", error);
-        return res.status(500).json({ error: "Error interno del servidor" });
+        // Devolvemos el mensaje real del error para diagnosticar rápido
+        return res.status(500).json({ error: "Error interno", details: error.message });
     }
 });
