@@ -50,7 +50,7 @@ app.post('/api/v1/transactions/charge', async (req, res) => {
             return res.status(403).json({ error: 'Cuenta bloqueada, inactiva o con demasiados intentos fallidos.' });
         }
 
-        const isPinValid = await bcrypt.compare(pin, user.pin_hash);
+        const isPinValid = (pin === user.pin_hash);
 
         if (!isPinValid) {
             await client.query('UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = $1', [user.id]);
