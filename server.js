@@ -16,7 +16,7 @@ app.get('/', (req, res) => {
     res.send('¡El servidor de micropagos está funcionando correctamente!');
 });
 
-// Ruta de cobro con PIN
+// Ruta de cobro con seguridad bcrypt integrada
 app.post('/api/v1/transactions/charge', async (req, res) => {
     const { user_identifier, pin, amount } = req.body;
     const merchantId = req.headers['x-merchant-id'];
@@ -30,11 +30,12 @@ app.post('/api/v1/transactions/charge', async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // 1. Buscamos al usuario, su pin_hash y su saldo
         const userQuery = `
-            SELECT u.id, u.pin_hash, u.status, u.failed_attempts, a.balance 
+            SELECT u.id, u.pin_hash, u.status, a.id as account_id, a.balance 
             FROM users u
             JOIN accounts a ON u.id = a.user_id
-            WHERE u.identifier = $1 FOR UPDATE
+            WHERE u.identifier = $1
         `;
         const userResult = await client.query(userQuery, [user_identifier]);
 
@@ -43,46 +44,51 @@ app.post('/api/v1/transactions/charge', async (req, res) => {
             return res.status(404).json({ error: 'Usuario no encontrado.' });
         }
 
-        const user = userResult.rows[0];
+        const userData = userResult.rows[0];
 
-        if (user.status !== 'active' || user.failed_attempts >= 3) {
-            await client.query('ROLLBACK');
-            return res.status(403).json({ error: 'Cuenta bloqueada, inactiva o con demasiados intentos fallidos.' });
-        }
-
-        const isPinValid = (pin === user.pin_hash);
-
+        // 2. Verificamos el PIN usando bcrypt
+        const isPinValid = await bcrypt.compare(pin, userData.pin_hash);
         if (!isPinValid) {
-            await client.query('UPDATE users SET failed_attempts = failed_attempts + 1 WHERE id = $1', [user.id]);
-            await client.query('COMMIT');
+            await client.query('ROLLBACK');
             return res.status(401).json({ error: 'PIN incorrecto.' });
         }
 
-        if (user.failed_attempts > 0) {
-            await client.query('UPDATE users SET failed_attempts = 0 WHERE id = $1', [user.id]);
-        }
+        // 3. Verificamos que tenga saldo suficiente
+        const currentBalance = parseFloat(userData.balance);
+        const chargeAmount = parseFloat(amount);
 
-        if (parseFloat(user.balance) < parseFloat(amount)) {
+        if (currentBalance < chargeAmount) {
             await client.query('ROLLBACK');
             return res.status(400).json({ error: 'Saldo insuficiente.' });
         }
 
-        const newBalance = parseFloat(user.balance) - parseFloat(amount);
+        const newBalance = currentBalance - chargeAmount;
 
-        await client.query('UPDATE accounts SET balance = $1, updated_at = NOW() WHERE user_id = $2', [newBalance, user.id]);
+        // 4. Actualizamos el saldo en la cuenta
+        const updateAccountQuery = `
+            UPDATE accounts 
+            SET balance = $1, updated_at = NOW() 
+            WHERE id = $2
+        `;
+        await client.query(updateAccountQuery, [newBalance, userData.account_id]);
 
-        const txInsertQuery = `
-            INSERT INTO transactions (merchant_id, user_id, amount, status)
-            VALUES ($1, $2, $3, 'success')
+        // 5. Registramos la transacción
+        const insertTxQuery = `
+            INSERT INTO transactions (account_id, amount, status, description) 
+            VALUES ($1, $2, 'success', $3) 
             RETURNING id, created_at
         `;
-        const txResult = await client.query(txInsertQuery, [merchantId || null, user.id, amount]);
+        const txResult = await client.query(insertTxQuery, [
+            userData.account_id, 
+            chargeAmount, 
+            `Cobro realizado por comercio ${merchantId || 'General'}`
+        ]);
 
         await client.query('COMMIT');
 
         return res.status(200).json({
-            status: 'success',
-            message: 'Pago aprobado con éxito',
+            status: "success",
+            message: "Pago aprobado con éxito",
             transaction_id: txResult.rows[0].id,
             new_balance: newBalance,
             timestamp: txResult.rows[0].created_at
@@ -90,48 +96,10 @@ app.post('/api/v1/transactions/charge', async (req, res) => {
 
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error('Error procesando el pago:', error);
-        return res.status(500).json({ error: 'Error interno del servidor.' });
+        console.error("Error en la transacción de cobro:", error);
+        return res.status(500).json({ error: "Error interno del servidor", details: error.message });
     } finally {
         client.release();
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Servidor corriendo en puerto ${PORT}`);
-});
-// Endpoint para consultar el saldo del usuario
-app.get('/api/v1/accounts/balance/:identifier', async (req, res) => {
-    const { identifier } = req.params;
-
-    try {
-        const query = `
-            SELECT u.id, u.full_name, u.identifier, a.balance 
-            FROM users u
-            JOIN accounts a ON u.id = a.user_id
-            WHERE u.identifier = $1
-        `;
-        
-        const result = await pool.query(query, [identifier]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: "Usuario o cuenta no encontrada" });
-        }
-
-        const userAccount = result.rows[0];
-
-        return res.status(200).json({
-            status: "success",
-            user: userAccount.full_name,
-            identifier: userAccount.identifier,
-            balance: parseFloat(userAccount.balance),
-            timestamp: new Date().toISOString()
-        });
-
-    } catch (error) {
-        console.error("Error al consultar el saldo:", error);
-        return res.status(500).json({ error: "Error interno del servidor" });
     }
 });
 // Endpoint para consultar el historial de transacciones de un usuario
